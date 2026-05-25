@@ -5102,10 +5102,8 @@ async fn e2e_session_name_auto_restores_cookies() {
 
     // Session 2: fresh DaemonState with same session_name. Navigate without
     // explicit launch — this triggers auto_launch which calls
-    // try_auto_restore_state.
-    //
-    // NOTE: an explicit `launch` command skips auto_launch entirely, so
-    // session-name auto-restore only fires via the auto_launch path.
+    // try_auto_restore_state. See e2e_session_name_auto_restores_cookies_via_explicit_launch
+    // below for the explicit-launch (handle_launch) variant.
     {
         let mut state = DaemonState::new();
 
@@ -5127,6 +5125,119 @@ async fn e2e_session_name_auto_restores_cookies() {
         assert!(
             found,
             "Cookie should be auto-restored via --session-name. Cookies found: {:?}",
+            cookies
+                .iter()
+                .map(|c| c["name"].as_str().unwrap_or("?"))
+                .collect::<Vec<_>>()
+        );
+
+        let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+        assert_success(&resp);
+    }
+
+    // Clean up auto-saved state files
+    let sessions_dir = dirs::home_dir()
+        .unwrap()
+        .join(".agent-browser")
+        .join("sessions");
+    if let Ok(entries) = std::fs::read_dir(&sessions_dir) {
+        for entry in entries.flatten() {
+            let fname = entry.file_name().to_string_lossy().to_string();
+            if fname.starts_with(&format!("{}-", session_name)) {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+}
+
+/// Regression test for the `--headed` / `--executable-path` auto-restore gap.
+///
+/// Flags like `--headed` and `--executable-path` cause the CLI to dispatch an
+/// explicit `launch` command before the first action, which routes through
+/// `handle_launch` rather than `auto_launch`. Prior to the fix, only
+/// `auto_launch` invoked `try_auto_restore_state`, so `--session-name` silently
+/// failed to restore for any flag combination that triggered an explicit
+/// launch.
+#[tokio::test]
+#[ignore]
+async fn e2e_session_name_auto_restores_cookies_via_explicit_launch() {
+    let session_name = format!(
+        "e2e-session-name-explicit-{}",
+        &uuid::Uuid::new_v4().to_string()[..8]
+    );
+
+    let env = EnvGuard::new(&["AGENT_BROWSER_SESSION_NAME"]);
+    env.set("AGENT_BROWSER_SESSION_NAME", &session_name);
+
+    // Session 1: launch, set a cookie, close (auto-saves state).
+    {
+        let mut state = DaemonState::new();
+
+        let resp = execute_command(
+            &json!({ "id": "1", "action": "launch", "headless": true }),
+            &mut state,
+        )
+        .await;
+        assert_success(&resp);
+
+        let resp = execute_command(
+            &json!({ "id": "2", "action": "navigate", "url": "https://example.com" }),
+            &mut state,
+        )
+        .await;
+        assert_success(&resp);
+
+        let resp = execute_command(
+            &json!({
+                "id": "3",
+                "action": "cookies_set",
+                "name": "session_name_explicit_test",
+                "value": "auto_restored_via_handle_launch",
+                "domain": ".example.com",
+                "path": "/",
+                "expires": 2000000000
+            }),
+            &mut state,
+        )
+        .await;
+        assert_success(&resp);
+
+        let resp = execute_command(&json!({ "id": "5", "action": "close" }), &mut state).await;
+        assert_success(&resp);
+    }
+
+    // Session 2: fresh DaemonState, send an EXPLICIT `launch` command (as the
+    // CLI does whenever --headed, --executable-path, --proxy, etc. is set).
+    // This routes through handle_launch — exactly the path that was broken.
+    {
+        let mut state = DaemonState::new();
+
+        let resp = execute_command(
+            &json!({ "id": "1", "action": "launch", "headless": true }),
+            &mut state,
+        )
+        .await;
+        assert_success(&resp);
+
+        let resp = execute_command(
+            &json!({ "id": "2", "action": "navigate", "url": "https://example.com" }),
+            &mut state,
+        )
+        .await;
+        assert_success(&resp);
+
+        let resp =
+            execute_command(&json!({ "id": "3", "action": "cookies_get" }), &mut state).await;
+        assert_success(&resp);
+        let cookies = get_data(&resp)["cookies"].as_array().unwrap();
+        let found = cookies.iter().any(|c| {
+            c["name"] == "session_name_explicit_test"
+                && c["value"] == "auto_restored_via_handle_launch"
+        });
+        assert!(
+            found,
+            "Cookie should be auto-restored via --session-name through handle_launch. \
+             Cookies found: {:?}",
             cookies
                 .iter()
                 .map(|c| c["name"].as_str().unwrap_or("?"))
