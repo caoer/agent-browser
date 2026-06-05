@@ -7,6 +7,7 @@
 services:
   # Build for Linux platforms
   build-linux:
+    platform: linux/amd64
     build:
       context: ..
       dockerfile: docker/Dockerfile.build
@@ -19,14 +20,14 @@ services:
         echo "Building for Linux platforms (parallel)..."
         
         # Build both targets in parallel
-        (echo "→ Linux x64" && cargo zigbuild --release --target x86_64-unknown-linux-gnu && cp /build/target/x86_64-unknown-linux-gnu/release/agent-browser /output/agent-browser-linux-x64 && chmod +x /output/agent-browser-linux-x64 && echo "✓ Linux x64 done") &
+        (echo "→ Linux x64" && cargo zigbuild --release --target x86_64-unknown-linux-gnu.2.28 && cp /build/target/x86_64-unknown-linux-gnu/release/agent-browser /output/agent-browser-linux-x64 && chmod +x /output/agent-browser-linux-x64 && echo "✓ Linux x64 done") &
         PID1=$!
         
-        (echo "→ Linux ARM64" && cargo zigbuild --release --target aarch64-unknown-linux-gnu && cp /build/target/aarch64-unknown-linux-gnu/release/agent-browser /output/agent-browser-linux-arm64 && chmod +x /output/agent-browser-linux-arm64 && echo "✓ Linux ARM64 done") &
+        (echo "→ Linux ARM64" && cargo zigbuild --release --target aarch64-unknown-linux-gnu.2.28 && cp /build/target/aarch64-unknown-linux-gnu/release/agent-browser /output/agent-browser-linux-arm64 && chmod +x /output/agent-browser-linux-arm64 && echo "✓ Linux ARM64 done") &
         PID2=$!
         
         # Wait for both to complete
-        wait $PID1 $PID2
+        wait $$PID1 $$PID2
         
         echo ""
         echo "✓ Linux platforms built successfully!"
@@ -35,6 +36,7 @@ services:
 
   # Build for Windows
   build-windows:
+    platform: linux/amd64
     build:
       context: ..
       dockerfile: docker/Dockerfile.build
@@ -54,8 +56,9 @@ services:
         ls -la /output/agent-browser-win32-*
       '
 
-  # Build for a single target (override with TARGET env var)
+  # Build for a single target
   build-single:
+    platform: linux/amd64
     build:
       context: ..
       dockerfile: docker/Dockerfile.build
@@ -63,12 +66,13 @@ services:
       - ../cli:/build
       - ../bin:/output
     environment:
-      - TARGET=${TARGET:-x86_64-unknown-linux-gnu}
+      - RUST_TARGET=${RUST_TARGET:-x86_64-unknown-linux-gnu}
+      - BUILD_TARGET=${BUILD_TARGET:-x86_64-unknown-linux-gnu.2.28}
       - OUTPUT_NAME=${OUTPUT_NAME:-agent-browser-linux-x64}
     command: |
       -c '
-        cargo zigbuild --release --target $TARGET
-        cp /build/target/$TARGET/release/agent-browser* /output/$OUTPUT_NAME
-        chmod +x /output/$OUTPUT_NAME 2>/dev/null || true
-        echo "✓ Built $OUTPUT_NAME"
+        cargo zigbuild --release --target $$BUILD_TARGET
+        cp /build/target/$$RUST_TARGET/release/agent-browser* /output/$$OUTPUT_NAME
+        chmod +x /output/$$OUTPUT_NAME 2>/dev/null || true
+        echo "✓ Built $$OUTPUT_NAME"
       '
