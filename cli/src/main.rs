@@ -1222,25 +1222,13 @@ fn main() {
                 .map(commands::shell_words_split)
                 .collect::<Vec<Vec<String>>>()
         });
-        run_batch(&flags, bail, arg_commands);
+        run_batch(&flags, &daemon_opts, bail, arg_commands);
         return;
     }
 
     let output_opts = OutputOptions::from_flags(&flags);
 
-    // ensure_daemon no longer pays a settle-sleep on every command, so a
-    // daemon that exited right after its liveness check surfaces here as an
-    // unreachable socket. Respawn once and retry before reporting failure.
-    let first_attempt = send_command(cmd.clone(), &flags.session);
-    let send_result = match first_attempt {
-        Err(ref e) if daemon_unreachable(e) => match ensure_daemon(&flags.session, &daemon_opts) {
-            Ok(_) => send_command(cmd.clone(), &flags.session),
-            Err(_) => first_attempt,
-        },
-        other => other,
-    };
-
-    match send_result {
+    match send_command_with_respawn(cmd.clone(), &flags.session, &daemon_opts) {
         Ok(resp) => {
             let success = resp.success;
             // Handle interactive confirmation
@@ -1314,7 +1302,31 @@ fn main() {
     }
 }
 
-fn run_batch(flags: &Flags, bail: bool, arg_commands: Option<Vec<Vec<String>>>) {
+/// send_command plus the daemon-shutdown-race recovery: ensure_daemon no
+/// longer pays a settle-sleep on every invocation, so a daemon that exited
+/// right after its liveness check surfaces as an unreachable socket on the
+/// request itself. Respawn once and retry before reporting failure.
+fn send_command_with_respawn(
+    cmd: serde_json::Value,
+    session: &str,
+    daemon_opts: &DaemonOptions,
+) -> Result<connection::Response, String> {
+    let first_attempt = send_command(cmd.clone(), session);
+    match first_attempt {
+        Err(ref e) if daemon_unreachable(e) => match ensure_daemon(session, daemon_opts) {
+            Ok(_) => send_command(cmd, session),
+            Err(_) => first_attempt,
+        },
+        other => other,
+    }
+}
+
+fn run_batch(
+    flags: &Flags,
+    daemon_opts: &DaemonOptions,
+    bail: bool,
+    arg_commands: Option<Vec<Vec<String>>>,
+) {
     let commands: Vec<Vec<String>> = if let Some(cmds) = arg_commands {
         cmds
     } else {
@@ -1400,7 +1412,7 @@ fn run_batch(flags: &Flags, bail: bool, arg_commands: Option<Vec<Vec<String>>>) 
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
-        match send_command(parsed, &flags.session) {
+        match send_command_with_respawn(parsed, &flags.session, daemon_opts) {
             Ok(resp) => {
                 if flags.json {
                     results.push(json!({
