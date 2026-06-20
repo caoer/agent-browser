@@ -35,6 +35,14 @@
     "browser-automation"
   ],
   "license": "Apache-2.0",
+  "peerDependencies": {
+    "@vercel/sandbox": ">=1.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@vercel/sandbox": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "typescript": "5.9.3"
   }

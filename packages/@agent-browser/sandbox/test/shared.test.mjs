@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
@@ -12,9 +13,14 @@ import {
 } from "../dist/index.js";
 
 test("defaults install spec to the package version", () => {
-  assert.equal(AGENT_BROWSER_SANDBOX_VERSION, "0.28.0");
-  assert.equal(DEFAULT_AGENT_BROWSER_INSTALL_SPEC, "agent-browser@0.28.0");
-  assert.equal(resolveAgentBrowserInstallSpec(), "agent-browser@0.28.0");
+  const packageJson = JSON.parse(
+    readFileSync(new URL("../package.json", import.meta.url), "utf-8"),
+  );
+  const expectedInstallSpec = `agent-browser@${packageJson.version}`;
+
+  assert.equal(AGENT_BROWSER_SANDBOX_VERSION, packageJson.version);
+  assert.equal(DEFAULT_AGENT_BROWSER_INSTALL_SPEC, expectedInstallSpec);
+  assert.equal(resolveAgentBrowserInstallSpec(), expectedInstallSpec);
   assert.equal(resolveAgentBrowserInstallSpec({ installSpec: "latest" }), "latest");
 });
 

@@ -297,8 +297,14 @@ jobs:
 
   publish-sandbox:
     name: Publish sandbox package to npm
-    needs: check-release
-    if: needs.check-release.outputs.should_publish_sandbox == 'true'
+    needs: [check-release, publish]
+    if: >-
+      always() &&
+      needs.check-release.outputs.should_publish_sandbox == 'true' &&
+      (
+        needs.check-release.outputs.should_release != 'true' ||
+        needs.publish.result == 'success'
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: Release

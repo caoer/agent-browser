@@ -305,16 +305,13 @@ async function runStep<T>(
 }
 
 async function loadVercelSandboxConstructor(): Promise<VercelSandboxConstructor> {
-  const importModule = new Function("specifier", "return import(specifier)") as (
-    specifier: string,
-  ) => Promise<Record<string, unknown>>;
-  const mod = await importModule("@vercel/sandbox").catch((error: unknown) => {
+  const mod = (await import("@vercel/sandbox").catch((error: unknown) => {
     throw new Error(
       `@agent-browser/sandbox/vercel requires @vercel/sandbox. Install it in your app to use this provider. ${String(
         error,
       )}`,
     );
-  });
+  })) as Record<string, unknown>;
   const Sandbox = mod.Sandbox;
   if (typeof Sandbox !== "function" && typeof Sandbox !== "object") {
     throw new Error("@vercel/sandbox did not export Sandbox.");
