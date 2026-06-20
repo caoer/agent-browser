@@ -93,6 +93,32 @@ test("creates and bootstraps a fresh Vercel sandbox", async () => {
   assert.deepEqual(calls[3], ["agent-browser", ["install"]]);
 });
 
+test("stops a fresh Vercel sandbox when bootstrap fails", async () => {
+  let stopped = false;
+  const sandbox = {
+    async runCommand() {
+      return commandResult("", "install failed", 1);
+    },
+    async snapshot() {
+      return { snapshotId: "snap" };
+    },
+    async stop() {
+      stopped = true;
+    },
+  };
+
+  await assert.rejects(
+    () =>
+      createAgentBrowserSandbox({
+        Sandbox: { async create() { return sandbox; } },
+        env: {},
+        install: { systemDependencies: [] },
+      }),
+    /install failed/,
+  );
+  assert.equal(stopped, true);
+});
+
 test("withAgentBrowserSandbox stops the sandbox", async () => {
   let stopped = false;
   const sandbox = {

@@ -123,7 +123,7 @@ export async function fillAndSubmitForm(url: string, data: Record<string, string
 
 ## Sandbox Snapshots (Fast Startup)
 
-A **sandbox snapshot** is a saved VM image of a Vercel Sandbox with system dependencies + agent-browser + Chromium already installed. Think of it like a Docker image -- instead of installing dependencies from scratch every time, the sandbox boots from the pre-built image.
+A **sandbox snapshot** is a saved VM image of a Vercel Sandbox with system dependencies + agent-browser + Chromium already installed. Think of it like a Docker image: instead of installing dependencies from scratch every time, the sandbox boots from the pre-built image.
 
 This is unrelated to agent-browser's *accessibility snapshot* feature (`agent-browser snapshot`), which dumps a page's accessibility tree. A sandbox snapshot is a Vercel infrastructure concept for fast VM startup.
 

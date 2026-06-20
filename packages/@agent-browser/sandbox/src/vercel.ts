@@ -187,10 +187,19 @@ export async function createAgentBrowserSandbox(
   );
 
   if (snapshotId === undefined && options.bootstrap !== false) {
-    await installAgentBrowserInVercelSandbox(sandbox, {
-      ...options.install,
-      onStep: options.install?.onStep ?? options.onStep,
-    });
+    try {
+      await installAgentBrowserInVercelSandbox(sandbox, {
+        ...options.install,
+        onStep: options.install?.onStep ?? options.onStep,
+      });
+    } catch (error) {
+      try {
+        await runStep("Stopping sandbox", () => sandbox.stop(), options.onStep);
+      } catch {
+        // Preserve the bootstrap failure, which is the actionable error for callers.
+      }
+      throw error;
+    }
   }
 
   return sandbox;
