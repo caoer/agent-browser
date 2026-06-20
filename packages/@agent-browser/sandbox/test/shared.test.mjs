@@ -58,3 +58,13 @@ test("quotes shell args and builds commands", () => {
 test("sanitizes default session names", () => {
   assert.equal(defaultSessionName("eve", "sandbox/id 1"), "eve-sandbox-id-1");
 });
+
+test("keeps generated default session names short", () => {
+  const session = defaultSessionName(
+    "eve",
+    "eve-sbx-ses-vercel-1d940340bdba4563-wrun_01KVKDK1Z3GC3XEC86DGWRWRMH-__root__",
+  );
+
+  assert.equal(session.length <= 48, true);
+  assert.match(session, /^eve-eve-sbx-ses-vercel-.+-[a-f0-9]{8}$/);
+});

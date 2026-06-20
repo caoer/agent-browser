@@ -38,6 +38,7 @@ export const DEFAULT_AGENT_BROWSER_INSTALL_SPEC = `agent-browser@${AGENT_BROWSER
 
 const SAFE_SHELL_ARG = /^[A-Za-z0-9_/:=.,@%+-]+$/;
 const SAFE_ENV_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const MAX_DEFAULT_SESSION_NAME_LENGTH = 48;
 
 export class AgentBrowserCommandError extends Error {
   readonly command: string;
@@ -119,7 +120,7 @@ export function throwIfCommandFailed<TJson>(
 export function defaultSessionName(prefix: string, id: string): string {
   const safePrefix = sanitizeSessionPart(prefix) || "agent-browser";
   const safeId = sanitizeSessionPart(id) || "default";
-  return `${safePrefix}-${safeId}`;
+  return truncateSessionName(`${safePrefix}-${safeId}`);
 }
 
 function formatShellEnv(env: Readonly<Record<string, string | undefined>> | undefined): string {
@@ -144,5 +145,26 @@ function parseJson<TJson>(value: string): TJson | null {
 }
 
 function sanitizeSessionPart(value: string): string {
-  return value.trim().replaceAll(/[^A-Za-z0-9_.-]+/g, "-").replaceAll(/^-+|-+$/g, "");
+  return value.trim().replaceAll(/[^A-Za-z0-9_-]+/g, "-").replaceAll(/^-+|-+$/g, "");
+}
+
+function truncateSessionName(value: string): string {
+  if (value.length <= MAX_DEFAULT_SESSION_NAME_LENGTH) {
+    return value;
+  }
+
+  const hash = hashSessionName(value);
+  const suffix = `-${hash}`;
+  const prefixLength = MAX_DEFAULT_SESSION_NAME_LENGTH - suffix.length;
+  const prefix = value.slice(0, prefixLength).replaceAll(/[-_]+$/g, "");
+  return `${prefix || "agent-browser"}${suffix}`;
+}
+
+function hashSessionName(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
 }

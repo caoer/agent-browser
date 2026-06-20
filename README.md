@@ -62,6 +62,9 @@ On Linux, install system dependencies:
 agent-browser install --with-deps
 ```
 
+This exits nonzero if the package manager cannot install every required
+browser library.
+
 ### Updating
 
 Upgrade to the latest version:

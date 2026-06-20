@@ -9,7 +9,11 @@ export default defineTool({
   }),
   async execute({ url }, ctx) {
     await runAgentBrowser(ctx, ["open", url]);
-    const snapshot = await runAgentBrowser(ctx, ["snapshot", "-i", "-c"], { json: false });
-    return { snapshot: snapshot.stdout };
+    try {
+      const snapshot = await runAgentBrowser(ctx, ["snapshot", "-i", "-c"], { json: false });
+      return { snapshot: snapshot.stdout };
+    } finally {
+      await runAgentBrowser(ctx, ["close"], { json: false }).catch(() => {});
+    }
   },
 });

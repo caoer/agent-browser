@@ -11,7 +11,7 @@ import {
 test("builds Eve revalidation key from install options", () => {
   assert.equal(
     agentBrowserRevalidationKey({ installSpec: "agent-browser@1.2.3", installSystemDependencies: true }),
-    "agent-browser:agent-browser@1.2.3:browser:system-deps",
+    "agent-browser:bootstrap-3:agent-browser@1.2.3:browser:system-deps",
   );
 });
 
@@ -34,10 +34,15 @@ test("installs agent-browser in an Eve sandbox", async () => {
 
   await installAgentBrowser(sandbox, { installSpec: "agent-browser@1.2.3", installSystemDependencies: true });
 
-  assert.deepEqual(commands, [
-    "npm install -g agent-browser@1.2.3",
-    "agent-browser install --with-deps",
-  ]);
+  assert.equal(commands.length, 3);
+  assert.match(commands[0], /^if command -v apt-get/);
+  assert.match(commands[0], /libglib2\.0-0t64/);
+  assert.match(commands[0], /libasound2t64/);
+  assert.match(commands[0], /sudo ldconfig; elif command -v dnf/);
+  assert.match(commands[0], /sudo ldconfig; else echo/);
+  assert.match(commands[0], /sudo dnf install -y --skip-broken -- glib2 nss/);
+  assert.equal(commands[1], "npm install -g agent-browser@1.2.3");
+  assert.equal(commands[2], "agent-browser install");
 });
 
 test("runs agent-browser through ctx.getSandbox", async () => {
@@ -58,6 +63,27 @@ test("runs agent-browser through ctx.getSandbox", async () => {
 
   assert.deepEqual(result.json, { ok: true });
   assert.equal(commands[0], "agent-browser --session eve-sandbox-id-1 open https://example.com --json");
+});
+
+test("uses a short generated session for long Eve sandbox ids", async () => {
+  const commands = [];
+  const ctx = {
+    async getSandbox() {
+      return {
+        id: "eve-sbx-ses-vercel-1d940340bdba4563-wrun_01KVKDK1Z3GC3XEC86DGWRWRMH-__root__",
+        async run({ command }) {
+          commands.push(command);
+          return { exitCode: 0, stdout: '{"ok":true}', stderr: "" };
+        },
+      };
+    },
+  };
+
+  await runAgentBrowser(ctx, ["open", "https://example.com"]);
+
+  const session = commands[0].match(/--session ([^ ]+)/)?.[1];
+  assert.equal(session.length <= 48, true);
+  assert.match(commands[0], /^agent-browser --session eve-eve-sbx-ses-vercel-.+-[a-f0-9]{8} open/);
 });
 
 test("accepts Eve promise-like sandbox methods", async () => {

@@ -2,7 +2,7 @@
 
 This example shows how to use `@agent-browser/sandbox` in two places:
 
-- `eve/` uses Eve's `ctx.getSandbox()` and `agent/sandbox.ts`.
+- `eve/` is a scaffold-style Eve app with a sandbox-backed browser tool.
 - `vercel/` uses `@vercel/sandbox` directly from a Node script.
 
 The package installs `agent-browser` in the sandbox and runs commands there,
@@ -10,15 +10,20 @@ not in the serverless function or app runtime.
 
 ## Eve
 
-Use the files in `eve/agent/` as the agent source:
+Run the Eve app from its own directory:
 
-```text
-eve/agent/sandbox.ts
-eve/agent/tools/browser_snapshot.ts
+```bash
+cd eve
+pnpm install
+vercel link --yes --scope <team-or-user> --project <project>
+vercel env pull .env.local --yes
+pnpm run dev
 ```
 
-The sandbox bootstrap installs `agent-browser` and Chrome once into the sandbox
-template. The tool then opens a URL and returns an accessibility snapshot.
+The app follows the project shape created by `eve init --channel-web-nextjs`.
+Its `agent/sandbox.ts` bootstrap installs `agent-browser` and Chrome once into
+the sandbox template. The `browser_snapshot` tool opens a URL and returns an
+accessibility snapshot to the agent.
 
 ## Vercel Sandbox
 
