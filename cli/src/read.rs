@@ -34,7 +34,7 @@ pub struct ReadOptions {
     pub raw: bool,
     /// Fail unless the selected response is served as Content-Type: text/markdown.
     pub require_md: bool,
-    /// Return a site-level llms.txt or llms-full.txt view.
+    /// Return the nearest ancestor llms.txt or llms-full.txt view.
     pub llms: Option<LlmsMode>,
     /// Return a heading outline for the selected page content.
     pub outline: bool,
@@ -177,13 +177,7 @@ async fn run_llms_index(
     target: &Url,
     options: &ReadOptions,
 ) -> Result<Value, String> {
-    let url = llms_file_url(target, "llms.txt");
-    let fetch = fetch_read_url(client, url, options)
-        .await
-        .map_err(|e| format!("Read request failed: {}", e))?;
-    if !fetch.success {
-        return Err(format!("llms.txt failed with HTTP {}", fetch.status));
-    }
+    let fetch = fetch_first_llms_file(client, target, "llms.txt", options).await?;
     let content = format_llms_index(&fetch.body, &fetch.final_url, options.filter.as_deref())?;
     Ok(read_json(target, &fetch, "llms-index", content))
 }
@@ -193,13 +187,7 @@ async fn run_llms_full(
     target: &Url,
     options: &ReadOptions,
 ) -> Result<Value, String> {
-    let url = llms_file_url(target, "llms-full.txt");
-    let fetch = fetch_read_url(client, url, options)
-        .await
-        .map_err(|e| format!("Read request failed: {}", e))?;
-    if !fetch.success {
-        return Err(format!("llms-full.txt failed with HTTP {}", fetch.status));
-    }
+    let fetch = fetch_first_llms_file(client, target, "llms-full.txt", options).await?;
     let content = if let Some(filter) = options.filter.as_deref() {
         filter_markdown_sections(&fetch.body, filter, "No matching llms-full.txt sections")
     } else {
@@ -213,13 +201,7 @@ async fn try_llms_link(
     target: &Url,
     options: &ReadOptions,
 ) -> Option<Result<Value, String>> {
-    let llms_url = llms_file_url(target, "llms.txt");
-    let llms = fetch_read_url(client, llms_url.clone(), options)
-        .await
-        .ok()?;
-    if !llms.success {
-        return None;
-    }
+    let (llms_url, llms) = fetch_optional_llms_file(client, target, "llms.txt", options).await?;
     let link = find_llms_link_for_target(&llms.body, &llms_url, target)?;
     let fetch = fetch_read_url(client, link.url.clone(), options)
         .await
@@ -379,12 +361,75 @@ fn markdown_fallback_url(url: &Url) -> Option<Url> {
     Some(md_url)
 }
 
-fn llms_file_url(url: &Url, filename: &str) -> Url {
-    let mut llms_url = url.clone();
-    llms_url.set_path(&format!("/{}", filename));
-    llms_url.set_query(None);
-    llms_url.set_fragment(None);
-    llms_url
+async fn fetch_first_llms_file(
+    client: &Client,
+    target: &Url,
+    filename: &str,
+    options: &ReadOptions,
+) -> Result<ReadFetch, String> {
+    let mut last_status = None;
+    for url in llms_file_candidates(target, filename) {
+        let fetch = fetch_read_url(client, url, options)
+            .await
+            .map_err(|e| format!("Read request failed: {}", e))?;
+        if fetch.success && !is_html_content_type(&fetch.content_type) {
+            return Ok(fetch);
+        }
+        last_status = Some(fetch.status);
+    }
+
+    match last_status {
+        Some(status) => Err(format!("{} failed with HTTP {}", filename, status)),
+        None => Err(format!("{} not found", filename)),
+    }
+}
+
+async fn fetch_optional_llms_file(
+    client: &Client,
+    target: &Url,
+    filename: &str,
+    options: &ReadOptions,
+) -> Option<(Url, ReadFetch)> {
+    for url in llms_file_candidates(target, filename) {
+        let fetch = fetch_read_url(client, url.clone(), options).await.ok()?;
+        if fetch.success && !is_html_content_type(&fetch.content_type) {
+            return Some((url, fetch));
+        }
+    }
+    None
+}
+
+fn llms_file_candidates(url: &Url, filename: &str) -> Vec<Url> {
+    let mut candidates = Vec::new();
+    let mut prefixes = Vec::new();
+    let path = url.path().trim_matches('/');
+    if !path.is_empty() {
+        let segments = path.split('/').collect::<Vec<_>>();
+        for len in (1..=segments.len()).rev() {
+            prefixes.push(format!("/{}", segments[..len].join("/")));
+        }
+    }
+    prefixes.push(String::new());
+
+    for prefix in prefixes {
+        let mut candidate = url.clone();
+        let path = if prefix.is_empty() {
+            format!("/{}", filename)
+        } else {
+            format!("{}/{}", prefix.trim_end_matches('/'), filename)
+        };
+        candidate.set_path(&path);
+        candidate.set_query(None);
+        candidate.set_fragment(None);
+        if !candidates
+            .iter()
+            .any(|existing: &Url| existing == &candidate)
+        {
+            candidates.push(candidate);
+        }
+    }
+
+    candidates
 }
 
 fn parse_llms_links(body: &str, base_url: &Url) -> Vec<LlmsLink> {
@@ -934,6 +979,25 @@ mod tests {
     }
 
     #[test]
+    fn llms_file_candidates_walks_to_origin_root() {
+        let url = normalize_url("https://example.com/docs/organize/navigation?x=1").unwrap();
+        let candidates = llms_file_candidates(&url, "llms.txt")
+            .into_iter()
+            .map(|url| url.to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            candidates,
+            vec![
+                "https://example.com/docs/organize/navigation/llms.txt",
+                "https://example.com/docs/organize/llms.txt",
+                "https://example.com/docs/llms.txt",
+                "https://example.com/llms.txt",
+            ]
+        );
+    }
+
+    #[test]
     fn html_to_markdownish_extracts_readable_text() {
         let html = r#"
           <html><head><title>Skip</title><style>.x{}</style></head>
@@ -1080,7 +1144,8 @@ Inline [Authentication](/inline-auth) should not become a TOC item.
             for expected_path in [
                 "/docs/intro",
                 "/docs/intro.md",
-                "/llms.txt",
+                "/docs/intro/llms.txt",
+                "/docs/llms.txt",
                 "/markdown/intro.md",
             ] {
                 let (mut stream, _) = listener.accept().await.unwrap();
@@ -1091,7 +1156,10 @@ Inline [Authentication](/inline-auth) should not become a TOC item.
                 let (status, content_type, body) = match expected_path {
                     "/docs/intro" => ("200 OK", "text/html", "<h1>HTML</h1>"),
                     "/docs/intro.md" => ("404 Not Found", "text/html", "missing"),
-                    "/llms.txt" => ("200 OK", "text/markdown", "- [Intro](/markdown/intro.md)\n"),
+                    "/docs/intro/llms.txt" => ("404 Not Found", "text/html", "missing"),
+                    "/docs/llms.txt" => {
+                        ("200 OK", "text/markdown", "- [Intro](/markdown/intro.md)\n")
+                    }
                     "/markdown/intro.md" => ("200 OK", "text/markdown", "# Intro via llms\n"),
                     _ => unreachable!(),
                 };
@@ -1122,18 +1190,30 @@ Inline [Authentication](/inline-auth) should not become a TOC item.
         let base = format!("http://{}/docs/intro", addr);
 
         tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let mut buf = [0_u8; 2048];
-            let n = stream.read(&mut buf).await.unwrap_or(0);
-            let request = String::from_utf8_lossy(&buf[..n]).to_ascii_lowercase();
-            assert!(request.starts_with("get /llms.txt "));
-            let body = "- [Intro](/docs/intro)\n- [Authentication](/docs/auth)\n";
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/markdown\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                body.len(),
-                body
-            );
-            let _ = stream.write_all(response.as_bytes()).await;
+            for expected_path in ["/docs/intro/llms.txt", "/docs/llms.txt"] {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut buf = [0_u8; 2048];
+                let n = stream.read(&mut buf).await.unwrap_or(0);
+                let request = String::from_utf8_lossy(&buf[..n]).to_ascii_lowercase();
+                assert!(request.starts_with(&format!("get {} ", expected_path)));
+                let (status, content_type, body) = if expected_path == "/docs/llms.txt" {
+                    (
+                        "200 OK",
+                        "text/markdown",
+                        "- [Intro](/docs/intro)\n- [Authentication](/docs/auth)\n",
+                    )
+                } else {
+                    ("200 OK", "text/html", "<h1>Not docs</h1>")
+                };
+                let response = format!(
+                    "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    status,
+                    content_type,
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
         });
 
         let options = ReadOptions {
@@ -1144,6 +1224,7 @@ Inline [Authentication](/inline-auth) should not become a TOC item.
         let data = run_read(&base, options).await.unwrap();
         let content = data["content"].as_str().unwrap();
         assert_eq!(data["source"], "llms-index");
+        assert_eq!(data["finalUrl"], format!("http://{}/docs/llms.txt", addr));
         assert!(content.contains("Authentication"));
         assert!(!content.contains("Intro]"));
     }
@@ -1155,18 +1236,30 @@ Inline [Authentication](/inline-auth) should not become a TOC item.
         let base = format!("http://{}/docs/intro", addr);
 
         tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let mut buf = [0_u8; 2048];
-            let n = stream.read(&mut buf).await.unwrap_or(0);
-            let request = String::from_utf8_lossy(&buf[..n]).to_ascii_lowercase();
-            assert!(request.starts_with("get /llms-full.txt "));
-            let body = "# Intro\nWelcome.\n\n## Auth\nUse token auth.\n\n## Other\nNo match.\n";
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/markdown\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                body.len(),
-                body
-            );
-            let _ = stream.write_all(response.as_bytes()).await;
+            for expected_path in ["/docs/intro/llms-full.txt", "/docs/llms-full.txt"] {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut buf = [0_u8; 2048];
+                let n = stream.read(&mut buf).await.unwrap_or(0);
+                let request = String::from_utf8_lossy(&buf[..n]).to_ascii_lowercase();
+                assert!(request.starts_with(&format!("get {} ", expected_path)));
+                let (status, content_type, body) = if expected_path == "/docs/llms-full.txt" {
+                    (
+                        "200 OK",
+                        "text/markdown",
+                        "# Intro\nWelcome.\n\n## Auth\nUse token auth.\n\n## Other\nNo match.\n",
+                    )
+                } else {
+                    ("404 Not Found", "text/html", "missing")
+                };
+                let response = format!(
+                    "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    status,
+                    content_type,
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
         });
 
         let options = ReadOptions {
@@ -1177,6 +1270,10 @@ Inline [Authentication](/inline-auth) should not become a TOC item.
         let data = run_read(&base, options).await.unwrap();
         let content = data["content"].as_str().unwrap();
         assert_eq!(data["source"], "llms-full");
+        assert_eq!(
+            data["finalUrl"],
+            format!("http://{}/docs/llms-full.txt", addr)
+        );
         assert!(content.contains("## Auth"));
         assert!(!content.contains("# Intro"));
         assert!(!content.contains("## Other"));

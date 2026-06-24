@@ -162,22 +162,22 @@ agent-browser get box <sel>           # Get bounding box
 agent-browser get styles <sel>        # Get computed styles
 ```
 
-### Read Docs
+### Read Agent-Friendly Text
 
 ```bash
 agent-browser read
-agent-browser read https://docs.example.com/guide
-agent-browser read https://docs.example.com/guide --filter auth
-agent-browser read https://docs.example.com/guide --outline
+agent-browser read https://example.com/article
+agent-browser read https://example.com/article --filter overview
+agent-browser read https://example.com/article --outline
 agent-browser read https://docs.example.com --llms index --filter auth
 agent-browser read https://docs.example.com --llms full --filter auth
-agent-browser read docs.example.com/guide --require-md
-agent-browser read https://docs.example.com/guide --json
+agent-browser read example.com/article --require-md
+agent-browser read https://example.com/article --json
 ```
 
-`read` fetches a URL without launching Chrome. Omit the URL to read the active tab in the current browser session. It sends `Accept: text/markdown` by default, tries the same URL with `.md` appended when the first response is not markdown, checks `/llms.txt` for a matching docs link, prints markdown or plain text when available, and falls back to readable text extracted from HTML. It does not read `/llms-full.txt` unless you ask for it.
+`read` fetches a URL without launching Chrome. Omit the URL to read the active tab in the current browser session. It sends `Accept: text/markdown` by default, tries the same URL with `.md` appended when the first response is not markdown, walks ancestor paths toward `/` to find the nearest `llms.txt` for a matching docs link, prints markdown or plain text when available, and falls back to readable text extracted from HTML. It does not read `llms-full.txt` unless you ask for it.
 
-Options: `--raw` prints the response body without HTML extraction, `--require-md` fails unless the server returns `Content-Type: text/markdown`, `--outline` prints a compact heading outline for one page, `--llms index` prints a compact `/llms.txt` link list, `--llms full` reads `/llms-full.txt`, `--filter <text>` narrows page sections, llms links/sections, or outline headings, and `--timeout <ms>` changes the request timeout.
+Options: `--raw` prints the response body without HTML extraction, `--require-md` fails unless the server returns `Content-Type: text/markdown`, `--outline` prints a compact heading outline for one page, `--llms index` prints a compact nearest-ancestor `llms.txt` link list, `--llms full` reads the nearest-ancestor `llms-full.txt`, `--filter <text>` narrows page sections, llms links/sections, or outline headings, and `--timeout <ms>` changes the request timeout.
 
 ### Check State
 

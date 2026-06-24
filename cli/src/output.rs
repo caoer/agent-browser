@@ -1289,15 +1289,16 @@ Usage: agent-browser read [url] [--raw] [--require-md] [--llms <index|full>] [--
 Fetches a URL as agent-readable text. Omit the URL to read the active tab in
 the current browser session. The request prefers markdown with
 Accept: text/markdown, tries the same URL with .md appended when the first
-response is not markdown, checks /llms.txt for a matching docs link, falls back
-to plain text or readable text extracted from HTML, and prints only the document
-content by default. Use --outline for a compact heading outline of a single
-page. Use --llms index or --llms full for site-level llms files.
+response is not markdown, walks ancestor paths toward / to find the nearest
+llms.txt for a matching docs link, falls back to plain text or readable text
+extracted from HTML, and prints only the document content by default. Use
+--outline for a compact heading outline of a single page. Use --llms index or
+--llms full for nearest-ancestor llms files.
 
 Options:
   --raw                Print the response body without HTML extraction
   --require-md         Fail unless the response is Content-Type: text/markdown
-  --llms <index|full>  Print /llms.txt links or /llms-full.txt
+  --llms <index|full>  Print nearest llms.txt links or llms-full.txt
   --outline            Print a heading outline for the selected page
   --filter <text>      Filter page sections, --llms links/sections, or --outline headings
   --timeout <ms>       Request timeout in milliseconds (default: 10000)
