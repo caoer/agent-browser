@@ -78,6 +78,63 @@ pub fn parse_timeout_ms(raw: &str) -> Result<u64, String> {
     Ok(ms)
 }
 
+pub fn options_from_command(cmd: &Value) -> Result<ReadOptions, String> {
+    let timeout_ms = cmd
+        .get("timeout")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(DEFAULT_TIMEOUT_MS);
+    if timeout_ms == 0 {
+        return Err("Read timeout must be greater than 0".to_string());
+    }
+    let llms = cmd
+        .get("llms")
+        .and_then(|v| v.as_str())
+        .map(parse_llms_mode)
+        .transpose()?;
+    let mut headers = HashMap::new();
+    if let Some(value) = cmd.get("headers") {
+        let map = value
+            .as_object()
+            .ok_or_else(|| "read headers must be a JSON object".to_string())?;
+        for (key, value) in map {
+            if let Some(value) = value.as_str() {
+                headers.insert(key.to_string(), value.to_string());
+            }
+        }
+    }
+    let allowed_domains = cmd
+        .get("allowedDomains")
+        .and_then(|v| v.as_array())
+        .map(|domains| {
+            domains
+                .iter()
+                .filter_map(|domain| domain.as_str())
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    Ok(ReadOptions {
+        raw: cmd.get("raw").and_then(|v| v.as_bool()).unwrap_or(false),
+        require_md: cmd
+            .get("requireMd")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        llms,
+        outline: cmd
+            .get("outline")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        filter: cmd
+            .get("filter")
+            .and_then(|v| v.as_str())
+            .map(ToString::to_string),
+        timeout_ms,
+        headers,
+        allowed_domains,
+    })
+}
+
 pub fn normalize_url(raw: &str) -> Result<Url, String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -346,6 +403,36 @@ fn read_json_from_content(
     } else {
         read_json(target, fetch, source, content)
     }
+}
+
+pub fn read_json_from_active_html(active_url: &str, html: String, options: &ReadOptions) -> Value {
+    let (source, content) = if options.raw {
+        ("active-tab-raw", html)
+    } else {
+        ("active-tab-html", html_to_markdownish(&html))
+    };
+    let content = if options.outline {
+        format_page_outline(&content, active_url, options.filter.as_deref())
+    } else if let Some(filter) = options.filter.as_deref() {
+        filter_page_sections(&content, filter)
+    } else {
+        content
+    };
+    let source = if options.outline {
+        format!("{}-outline", source)
+    } else if options.filter.is_some() {
+        format!("{}-filtered", source)
+    } else {
+        source.to_string()
+    };
+    json!({
+        "url": active_url,
+        "finalUrl": active_url,
+        "contentType": "text/html",
+        "source": source,
+        "truncated": false,
+        "content": content,
+    })
 }
 
 fn is_markdown_content_type(content_type: &str) -> bool {
@@ -1137,6 +1224,54 @@ Inline [Authentication](/inline-auth) should not become a TOC item.
         assert!(filtered.contains("Use a component."));
         assert!(!filtered.contains("## Setup"));
         assert!(!filtered.contains("## Further reading"));
+    }
+
+    #[test]
+    fn options_from_command_includes_headers_and_allowed_domains() {
+        let cmd = json!({
+            "action": "read",
+            "timeout": 2500,
+            "headers": {
+                "Authorization": "Bearer token",
+                "X-Trace": "abc"
+            },
+            "allowedDomains": ["example.com", "*.example.org"]
+        });
+
+        let options = options_from_command(&cmd).unwrap();
+
+        assert_eq!(options.timeout_ms, 2500);
+        assert_eq!(
+            options.headers.get("Authorization").map(String::as_str),
+            Some("Bearer token")
+        );
+        assert_eq!(
+            options.headers.get("X-Trace").map(String::as_str),
+            Some("abc")
+        );
+        assert_eq!(
+            options.allowed_domains,
+            vec!["example.com".to_string(), "*.example.org".to_string()]
+        );
+    }
+
+    #[test]
+    fn read_json_from_active_html_uses_current_dom() {
+        let options = ReadOptions {
+            filter: Some("Account".to_string()),
+            ..ReadOptions::default()
+        };
+        let html = "<html><body><h1>Home</h1><p>Welcome.</p><h2>Account</h2><p>Signed in.</p></body></html>";
+
+        let data =
+            read_json_from_active_html("https://example.com/app", html.to_string(), &options);
+
+        assert_eq!(data["source"], "active-tab-html-filtered");
+        assert_eq!(data["finalUrl"], "https://example.com/app");
+        let content = data["content"].as_str().unwrap();
+        assert!(content.contains("## Account"));
+        assert!(content.contains("Signed in."));
+        assert!(!content.contains("# Home"));
     }
 
     #[test]

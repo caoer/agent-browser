@@ -1296,14 +1296,15 @@ agent-browser read - Fetch a URL as agent-readable text
 
 Usage: agent-browser read [url] [--raw] [--require-md] [--llms <index|full>] [--outline] [--filter <text>] [--timeout <ms>]
 
-Fetches a URL as agent-readable text. Omit the URL to read the active tab in
-the current browser session. The request prefers markdown with
-Accept: text/markdown, tries the same URL with .md appended when the first
-response is not markdown, walks ancestor paths toward / to find the nearest
-llms.txt for a matching docs link, falls back to plain text or readable text
-extracted from HTML, and prints only the document content by default. Use
---outline for a compact heading outline of a single page. Use --llms index or
---llms full for nearest-ancestor llms files.
+Fetches a URL as agent-readable text. Omit the URL to read the rendered DOM of
+the active tab in the current browser session. Explicit URL reads prefer
+markdown with Accept: text/markdown, try the same URL with .md appended when
+the first response is not markdown, walk ancestor paths toward / to find the
+nearest llms.txt for a matching docs link, fall back to plain text or readable
+text extracted from HTML, and print only the document content by default.
+Use --outline for a compact heading outline of a single page. Use --llms index
+or --llms full for nearest-ancestor llms files; with no URL, --llms and
+--require-md use the active tab URL because they depend on HTTP resources.
 
 Options:
   --raw                Print the response body without HTML extraction

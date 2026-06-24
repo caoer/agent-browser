@@ -251,92 +251,6 @@ fn parse_proxy(proxy_str: &str) -> ParsedProxy {
     }
 }
 
-fn read_options_from_command(
-    cmd: &serde_json::Value,
-    flags: &Flags,
-) -> Result<read::ReadOptions, String> {
-    let timeout_ms = cmd
-        .get("timeout")
-        .and_then(|v| v.as_u64())
-        .unwrap_or_else(read::default_timeout_ms);
-    let mut headers = std::collections::HashMap::new();
-    if let Some(ref headers_json) = flags.headers {
-        match serde_json::from_str::<serde_json::Value>(headers_json) {
-            Ok(serde_json::Value::Object(map)) => {
-                for (key, value) in map {
-                    if let Some(value) = value.as_str() {
-                        headers.insert(key, value.to_string());
-                    }
-                }
-            }
-            _ => return Err(format!("Invalid JSON for --headers: {}", headers_json)),
-        }
-    }
-    let llms = cmd
-        .get("llms")
-        .and_then(|v| v.as_str())
-        .map(read::parse_llms_mode)
-        .transpose()?;
-    Ok(read::ReadOptions {
-        raw: cmd.get("raw").and_then(|v| v.as_bool()).unwrap_or(false),
-        require_md: cmd
-            .get("requireMd")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
-        llms,
-        outline: cmd
-            .get("outline")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
-        filter: cmd
-            .get("filter")
-            .and_then(|v| v.as_str())
-            .map(ToString::to_string),
-        timeout_ms,
-        headers,
-        allowed_domains: flags.allowed_domains.clone().unwrap_or_default(),
-    })
-}
-
-fn read_response_for_url(raw_url: &str, cmd: &serde_json::Value, flags: &Flags) -> Response {
-    let options = match read_options_from_command(cmd, flags) {
-        Ok(options) => options,
-        Err(e) => {
-            return Response {
-                success: false,
-                data: None,
-                error: Some(e),
-                warning: None,
-            }
-        }
-    };
-    let result = tokio::runtime::Runtime::new()
-        .map_err(|e| e.to_string())
-        .and_then(|rt| rt.block_on(read::run_read(raw_url, options)));
-    match result {
-        Ok(data) => Response {
-            success: true,
-            data: Some(data),
-            error: None,
-            warning: None,
-        },
-        Err(e) => Response {
-            success: false,
-            data: None,
-            error: Some(e),
-            warning: None,
-        },
-    }
-}
-
-fn print_read_response(resp: &Response, flags: &Flags) {
-    let output_opts = OutputOptions::from_flags(flags);
-    output::print_response_with_opts(resp, Some("read"), &output_opts);
-    if !resp.success {
-        exit(1);
-    }
-}
-
 fn run_profiles(json_mode: bool) {
     use crate::native::cdp::chrome::{find_chrome_user_data_dir, list_chrome_profiles};
 
@@ -957,14 +871,6 @@ fn main() {
         return;
     }
 
-    if cmd.get("action").and_then(|v| v.as_str()) == Some("read") {
-        if let Some(url) = cmd.get("url").and_then(|v| v.as_str()) {
-            let resp = read_response_for_url(url, &cmd, &flags);
-            print_read_response(&resp, &flags);
-            return;
-        }
-    }
-
     // Parse proxy URL to separate server from credentials for the daemon.
     let (proxy_server, proxy_username, proxy_password) = if let Some(ref proxy_str) = flags.proxy {
         let parsed = parse_proxy(proxy_str);
@@ -1447,48 +1353,6 @@ fn main() {
         }
     }
 
-    if cmd.get("action").and_then(|v| v.as_str()) == Some("read") {
-        let url_resp = match send_command_with_respawn(
-            json!({
-                "id": gen_id(),
-                "action": "url"
-            }),
-            &flags.session,
-            &daemon_opts,
-        ) {
-            Ok(resp) => resp,
-            Err(e) => Response {
-                success: false,
-                data: None,
-                error: Some(e),
-                warning: None,
-            },
-        };
-        if !url_resp.success {
-            print_read_response(&url_resp, &flags);
-            return;
-        }
-        let Some(active_url) = url_resp
-            .data
-            .as_ref()
-            .and_then(|data| data.get("url"))
-            .and_then(|url| url.as_str())
-            .filter(|url| !url.is_empty())
-        else {
-            let resp = Response {
-                success: false,
-                data: None,
-                error: Some("Active tab has no URL".to_string()),
-                warning: None,
-            };
-            print_read_response(&resp, &flags);
-            return;
-        };
-        let resp = read_response_for_url(active_url, &cmd, &flags);
-        print_read_response(&resp, &flags);
-        return;
-    }
-
     // Handle batch command: from args or stdin
     if cmd.get("action").and_then(|v| v.as_str()) == Some("batch") {
         let bail = cmd.get("bail").and_then(|v| v.as_bool()).unwrap_or(false);
@@ -1705,69 +1569,6 @@ fn run_batch(
 mod tests {
     use super::*;
 
-    fn test_flags() -> Flags {
-        Flags {
-            json: false,
-            headed: false,
-            debug: false,
-            session: "test".to_string(),
-            headers: None,
-            executable_path: None,
-            cdp: None,
-            extensions: Vec::new(),
-            init_scripts: Vec::new(),
-            enable: Vec::new(),
-            profile: None,
-            state: None,
-            proxy: None,
-            proxy_bypass: None,
-            args: None,
-            user_agent: None,
-            provider: None,
-            ignore_https_errors: false,
-            allow_file_access: false,
-            hide_scrollbars: true,
-            device: None,
-            auto_connect: false,
-            session_name: None,
-            annotate: false,
-            color_scheme: None,
-            download_path: None,
-            content_boundaries: false,
-            max_output: None,
-            allowed_domains: None,
-            action_policy: None,
-            confirm_actions: None,
-            confirm_interactive: false,
-            engine: None,
-            screenshot_dir: None,
-            screenshot_quality: None,
-            screenshot_format: None,
-            idle_timeout: None,
-            default_timeout: None,
-            no_auto_dialog: false,
-            model: None,
-            plugins: Vec::new(),
-            verbose: false,
-            quiet: false,
-            cli_executable_path: false,
-            cli_extensions: false,
-            cli_init_scripts: false,
-            cli_enable: false,
-            cli_profile: false,
-            cli_state: false,
-            cli_args: false,
-            cli_user_agent: false,
-            cli_proxy: false,
-            cli_proxy_bypass: false,
-            cli_allow_file_access: false,
-            cli_hide_scrollbars: false,
-            cli_annotate: false,
-            cli_download_path: false,
-            cli_headed: false,
-        }
-    }
-
     #[test]
     fn test_parse_proxy_simple() {
         let result = parse_proxy("http://proxy.com:8080");
@@ -1879,20 +1680,6 @@ mod tests {
         attach_plugins_to_command(&mut cmd, &[]);
 
         assert_eq!(cmd["plugins"], json!([]));
-    }
-
-    #[test]
-    fn test_read_options_include_allowed_domains() {
-        let cmd = json!({ "action": "read", "timeout": 1000 });
-        let mut flags = test_flags();
-        flags.allowed_domains = Some(vec!["example.com".to_string(), "*.example.org".to_string()]);
-
-        let options = read_options_from_command(&cmd, &flags).unwrap();
-
-        assert_eq!(
-            options.allowed_domains,
-            vec!["example.com".to_string(), "*.example.org".to_string()]
-        );
     }
 
     #[test]

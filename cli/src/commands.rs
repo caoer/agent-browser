@@ -316,7 +316,7 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
         "back" => Ok(json!({ "id": id, "action": "back" })),
         "forward" => Ok(json!({ "id": id, "action": "forward" })),
         "reload" => Ok(json!({ "id": id, "action": "reload" })),
-        "read" => parse_read(&rest, &id),
+        "read" => parse_read(&rest, &id, flags),
 
         // === Core Actions ===
         "click" => {
@@ -1865,7 +1865,7 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
     }
 }
 
-fn parse_read(rest: &[&str], id: &str) -> Result<Value, ParseError> {
+fn parse_read(rest: &[&str], id: &str, flags: &Flags) -> Result<Value, ParseError> {
     const READ_USAGE: &str =
         "read [url] [--raw] [--require-md] [--llms <index|full>] [--outline] [--filter <text>] [--timeout <ms>]";
     let mut cmd = json!({
@@ -1970,6 +1970,24 @@ fn parse_read(rest: &[&str], id: &str) -> Result<Value, ParseError> {
     }
     if let Some(url) = url {
         cmd["url"] = json!(url);
+    }
+    if let Some(ref headers_json) = flags.headers {
+        let headers = serde_json::from_str::<serde_json::Value>(headers_json).map_err(|_| {
+            ParseError::InvalidValue {
+                message: format!("Invalid JSON for --headers: {}", headers_json),
+                usage: READ_USAGE,
+            }
+        })?;
+        if !headers.is_object() {
+            return Err(ParseError::InvalidValue {
+                message: format!("Invalid JSON object for --headers: {}", headers_json),
+                usage: READ_USAGE,
+            });
+        }
+        cmd["headers"] = headers;
+    }
+    if let Some(ref allowed_domains) = flags.allowed_domains {
+        cmd["allowedDomains"] = json!(allowed_domains);
     }
     Ok(cmd)
 }
@@ -3546,6 +3564,33 @@ mod tests {
         assert_eq!(cmd["raw"], true);
         assert_eq!(cmd["requireMd"], true);
         assert_eq!(cmd["timeout"], 2500);
+    }
+
+    #[test]
+    fn test_read_includes_global_headers_and_allowed_domains() {
+        let mut flags = default_flags();
+        flags.headers = Some(r#"{"Authorization":"Bearer token","X-Trace":"abc"}"#.to_string());
+        flags.allowed_domains = Some(vec!["example.com".to_string(), "*.example.org".to_string()]);
+
+        let cmd = parse_command(&args("read https://example.com/docs"), &flags).unwrap();
+
+        assert_eq!(cmd["action"], "read");
+        assert_eq!(cmd["headers"]["Authorization"], "Bearer token");
+        assert_eq!(cmd["headers"]["X-Trace"], "abc");
+        assert_eq!(
+            cmd["allowedDomains"],
+            json!(["example.com", "*.example.org"])
+        );
+    }
+
+    #[test]
+    fn test_read_rejects_invalid_headers_json() {
+        let mut flags = default_flags();
+        flags.headers = Some("not json".to_string());
+
+        let result = parse_command(&args("read https://example.com/docs"), &flags);
+
+        assert!(matches!(result, Err(ParseError::InvalidValue { .. })));
     }
 
     #[test]
