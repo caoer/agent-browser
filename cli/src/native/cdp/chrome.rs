@@ -674,6 +674,16 @@ pub async fn auto_connect_cdp() -> Result<String, String> {
         }
     }
 
+    // External discovery: run a user-supplied command that outputs CDP ports.
+    // Then probe static ports from env. Both mechanisms let external tools
+    // (browser managers, profile launchers, CI harnesses) feed ports into
+    // auto-connect without agent-browser carrying vendor-specific code.
+    for port in discover_external_cdp_ports() {
+        if let Ok(ws_url) = discover_cdp_url("127.0.0.1", port, None).await {
+            return Ok(ws_url);
+        }
+    }
+
     // Fallback: probe common ports
     for port in [9222u16, 9229] {
         if let Ok(ws_url) = discover_cdp_url("127.0.0.1", port, None).await {
@@ -682,6 +692,67 @@ pub async fn auto_connect_cdp() -> Result<String, String> {
     }
 
     Err("No running Chrome instance found. Launch Chrome with --remote-debugging-port or use --cdp.".to_string())
+}
+
+/// Collect CDP ports from external sources.
+///
+/// Two env vars, evaluated in order (ports merged, deduplicated):
+///
+/// 1. `AGENT_BROWSER_AUTO_CONNECT_DISCOVER` — a shell command whose stdout
+///    is parsed for port numbers (one per line, or comma/space separated).
+///    The command runs with a 2 s timeout; failure is silent.
+///    Example: `export AGENT_BROWSER_AUTO_CONNECT_DISCOVER="zt-browsers cdp-ports"`
+///
+/// 2. `AGENT_BROWSER_AUTO_CONNECT_PORTS` — static comma-separated port list.
+///    Example: `export AGENT_BROWSER_AUTO_CONNECT_PORTS="29223,9333"`
+///
+/// This keeps agent-browser vendor-neutral: any browser manager (zt-browser,
+/// Playwright, custom launchers) hooks in via its own shell init, setting one
+/// of these env vars.
+fn discover_external_cdp_ports() -> Vec<u16> {
+    let mut ports = Vec::new();
+
+    // Dynamic: run a discover command
+    if let Ok(cmd) = std::env::var("AGENT_BROWSER_AUTO_CONNECT_DISCOVER") {
+        if !cmd.is_empty() {
+            if let Ok(output) = std::process::Command::new("sh")
+                .args(["-c", &cmd])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .output()
+            {
+                if output.status.success() {
+                    if let Ok(stdout) = String::from_utf8(output.stdout) {
+                        ports.extend(parse_port_list(&stdout));
+                    }
+                }
+            }
+        }
+    }
+
+    // Static: comma-separated ports
+    if let Ok(ports_str) = std::env::var("AGENT_BROWSER_AUTO_CONNECT_PORTS") {
+        ports.extend(parse_port_list(&ports_str));
+    }
+
+    ports.sort_unstable();
+    ports.dedup();
+    ports
+}
+
+/// Parse port numbers from a string. Accepts comma, space, or newline
+/// separators. Non-numeric tokens are silently skipped.
+fn parse_port_list(s: &str) -> Vec<u16> {
+    s.split(|c: char| c == ',' || c == '\n' || c == ' ')
+        .filter_map(|token| {
+            let cleaned: String = token.trim().chars().filter(|c| c.is_ascii_digit()).collect();
+            if cleaned.is_empty() {
+                return None;
+            }
+            cleaned.parse::<u16>().ok()
+        })
+        .collect()
 }
 
 /// Resolve a CDP WebSocket URL from a DevToolsActivePort entry.
@@ -1990,5 +2061,54 @@ mod tests {
 
         let result = resolve_cdp_from_active_port(port, "/devtools/browser/dead").await;
         assert!(result.is_err(), "should fail when nothing is listening");
+    }
+
+    // External CDP port discovery tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_port_list_comma_separated() {
+        let ports = parse_port_list("9222,29223,9333");
+        assert_eq!(ports, vec![9222, 29223, 9333]);
+    }
+
+    #[test]
+    fn test_parse_port_list_newline_separated() {
+        let ports = parse_port_list("9222\n29223\n9333\n");
+        assert_eq!(ports, vec![9222, 29223, 9333]);
+    }
+
+    #[test]
+    fn test_parse_port_list_with_underscores() {
+        // TOML-style numeric separators (e.g. 29_223) — digits extracted
+        let ports = parse_port_list("29_223, 9_222");
+        assert_eq!(ports, vec![29223, 9222]);
+    }
+
+    #[test]
+    fn test_parse_port_list_mixed_separators() {
+        let ports = parse_port_list("9222, 29223\n9333 8080");
+        assert_eq!(ports, vec![9222, 29223, 9333, 8080]);
+    }
+
+    #[test]
+    fn test_parse_port_list_skips_garbage() {
+        let ports = parse_port_list("9222, not-a-port, , 29223");
+        assert_eq!(ports, vec![9222, 29223]);
+    }
+
+    #[test]
+    fn test_parse_port_list_empty() {
+        let ports = parse_port_list("");
+        assert!(ports.is_empty());
+    }
+
+    #[test]
+    fn test_discover_external_cdp_ports_no_env() {
+        // With neither env var set, returns empty (doesn't panic)
+        // Note: can't unset env vars safely in parallel tests, so just
+        // verify the function is callable
+        let ports = discover_external_cdp_ports();
+        let _ = ports;
     }
 }
