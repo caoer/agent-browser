@@ -89,6 +89,10 @@ URL: https://example.com/login
 For unstructured reading (no refs needed):
 
 ```bash
+agent-browser read                         # docs-friendly fetch for the active tab
+agent-browser read https://docs.example.com/guide  # docs-friendly fetch, prefers markdown
+agent-browser read https://docs.example.com/guide --outline  # compact page headings
+agent-browser read https://docs.example.com --llms index --filter auth  # compact llms.txt discovery
 agent-browser get text @e1                # visible text of an element
 agent-browser get html @e1                # innerHTML
 agent-browser get attr @e1 href           # any attribute
@@ -97,6 +101,8 @@ agent-browser get title                   # page title
 agent-browser get url                     # current URL
 agent-browser get count ".item"           # count matching elements
 ```
+
+Use `read [url]` when you need to consume documentation or other text pages rather than interact with a rendered UI. Omit the URL to read the active tab in the current browser session. It sends `Accept: text/markdown`, tries the same URL with `.md` appended when the first response is not markdown, checks `/llms.txt` for a matching docs link, prints markdown/plain text when available, and falls back to readable text extracted from HTML without launching Chrome. Add `--outline` for compact headings on one page, `--llms index` for a compact `/llms.txt` link list, `--llms full` only when you explicitly need `/llms-full.txt`, and `--filter <text>` to narrow llms links/sections or outline headings. Add `--require-md` when you specifically want to verify markdown negotiation, `--raw` when you need the response body unchanged, and `--json` when you need metadata such as `source` and `contentType`.
 
 ## Interacting
 

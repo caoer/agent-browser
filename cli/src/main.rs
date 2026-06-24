@@ -9,6 +9,7 @@ mod mcp;
 mod native;
 mod output;
 mod plugins;
+mod read;
 mod skills;
 #[cfg(test)]
 mod test_utils;
@@ -247,6 +248,91 @@ fn parse_proxy(proxy_str: &str) -> ParsedProxy {
         server,
         username,
         password,
+    }
+}
+
+fn read_options_from_command(
+    cmd: &serde_json::Value,
+    flags: &Flags,
+) -> Result<read::ReadOptions, String> {
+    let timeout_ms = cmd
+        .get("timeout")
+        .and_then(|v| v.as_u64())
+        .unwrap_or_else(read::default_timeout_ms);
+    let mut headers = std::collections::HashMap::new();
+    if let Some(ref headers_json) = flags.headers {
+        match serde_json::from_str::<serde_json::Value>(headers_json) {
+            Ok(serde_json::Value::Object(map)) => {
+                for (key, value) in map {
+                    if let Some(value) = value.as_str() {
+                        headers.insert(key, value.to_string());
+                    }
+                }
+            }
+            _ => return Err(format!("Invalid JSON for --headers: {}", headers_json)),
+        }
+    }
+    let llms = cmd
+        .get("llms")
+        .and_then(|v| v.as_str())
+        .map(read::parse_llms_mode)
+        .transpose()?;
+    Ok(read::ReadOptions {
+        raw: cmd.get("raw").and_then(|v| v.as_bool()).unwrap_or(false),
+        require_md: cmd
+            .get("requireMd")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        llms,
+        outline: cmd
+            .get("outline")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        filter: cmd
+            .get("filter")
+            .and_then(|v| v.as_str())
+            .map(ToString::to_string),
+        timeout_ms,
+        headers,
+    })
+}
+
+fn read_response_for_url(raw_url: &str, cmd: &serde_json::Value, flags: &Flags) -> Response {
+    let options = match read_options_from_command(cmd, flags) {
+        Ok(options) => options,
+        Err(e) => {
+            return Response {
+                success: false,
+                data: None,
+                error: Some(e),
+                warning: None,
+            }
+        }
+    };
+    let result = tokio::runtime::Runtime::new()
+        .map_err(|e| e.to_string())
+        .and_then(|rt| rt.block_on(read::run_read(raw_url, options)));
+    match result {
+        Ok(data) => Response {
+            success: true,
+            data: Some(data),
+            error: None,
+            warning: None,
+        },
+        Err(e) => Response {
+            success: false,
+            data: None,
+            error: Some(e),
+            warning: None,
+        },
+    }
+}
+
+fn print_read_response(resp: &Response, flags: &Flags) {
+    let output_opts = OutputOptions::from_flags(flags);
+    output::print_response_with_opts(resp, Some("read"), &output_opts);
+    if !resp.success {
+        exit(1);
     }
 }
 
@@ -870,6 +956,14 @@ fn main() {
         return;
     }
 
+    if cmd.get("action").and_then(|v| v.as_str()) == Some("read") {
+        if let Some(url) = cmd.get("url").and_then(|v| v.as_str()) {
+            let resp = read_response_for_url(url, &cmd, &flags);
+            print_read_response(&resp, &flags);
+            return;
+        }
+    }
+
     // Parse proxy URL to separate server from credentials for the daemon.
     let (proxy_server, proxy_username, proxy_password) = if let Some(ref proxy_str) = flags.proxy {
         let parsed = parse_proxy(proxy_str);
@@ -1350,6 +1444,48 @@ fn main() {
                 // Launch succeeded
             }
         }
+    }
+
+    if cmd.get("action").and_then(|v| v.as_str()) == Some("read") {
+        let url_resp = match send_command_with_respawn(
+            json!({
+                "id": gen_id(),
+                "action": "url"
+            }),
+            &flags.session,
+            &daemon_opts,
+        ) {
+            Ok(resp) => resp,
+            Err(e) => Response {
+                success: false,
+                data: None,
+                error: Some(e),
+                warning: None,
+            },
+        };
+        if !url_resp.success {
+            print_read_response(&url_resp, &flags);
+            return;
+        }
+        let Some(active_url) = url_resp
+            .data
+            .as_ref()
+            .and_then(|data| data.get("url"))
+            .and_then(|url| url.as_str())
+            .filter(|url| !url.is_empty())
+        else {
+            let resp = Response {
+                success: false,
+                data: None,
+                error: Some("Active tab has no URL".to_string()),
+                warning: None,
+            };
+            print_read_response(&resp, &flags);
+            return;
+        };
+        let resp = read_response_for_url(active_url, &cmd, &flags);
+        print_read_response(&resp, &flags);
+        return;
     }
 
     // Handle batch command: from args or stdin

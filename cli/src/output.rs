@@ -360,6 +360,15 @@ pub fn print_response_with_opts(resp: &Response, action: Option<&str>, opts: &Ou
             }
             return;
         }
+        if action == Some("read") {
+            if let Some(content) = data.get("content").and_then(|v| v.as_str()) {
+                print!("{}", content);
+                if !content.ends_with('\n') {
+                    println!();
+                }
+            }
+            return;
+        }
         // Navigation response
         if let Some(url) = data.get("url").and_then(|v| v.as_str()) {
             if let Some(title) = data.get("title").and_then(|v| v.as_str()) {
@@ -1268,6 +1277,43 @@ Global Options:
 
 Examples:
   agent-browser reload
+"##
+        }
+
+        "read" => {
+            r##"
+agent-browser read - Fetch a URL as agent-readable text
+
+Usage: agent-browser read [url] [--raw] [--require-md] [--llms <index|full>] [--outline] [--filter <text>] [--timeout <ms>]
+
+Fetches a URL as agent-readable text. Omit the URL to read the active tab in
+the current browser session. The request prefers markdown with
+Accept: text/markdown, tries the same URL with .md appended when the first
+response is not markdown, checks /llms.txt for a matching docs link, falls back
+to plain text or readable text extracted from HTML, and prints only the document
+content by default. Use --outline for a compact heading outline of a single
+page. Use --llms index or --llms full for site-level llms files.
+
+Options:
+  --raw                Print the response body without HTML extraction
+  --require-md         Fail unless the response is Content-Type: text/markdown
+  --llms <index|full>  Print /llms.txt links or /llms-full.txt
+  --outline            Print a heading outline for the selected page
+  --filter <text>      Filter --llms links/sections or --outline headings
+  --timeout <ms>       Request timeout in milliseconds (default: 10000)
+
+Global Options:
+  --json               Output metadata and content as JSON
+  --headers <json>     Additional HTTP headers, such as Authorization
+
+Examples:
+  agent-browser read
+  agent-browser read https://docs.example.com/guide
+  agent-browser read https://docs.example.com/guide --outline
+  agent-browser read https://docs.example.com --llms index --filter auth
+  agent-browser read https://docs.example.com --llms full --filter auth
+  agent-browser read docs.example.com/guide --require-md
+  agent-browser read https://api.example.com/docs --headers '{"Authorization":"Bearer token"}'
 "##
         }
 
@@ -3194,6 +3240,7 @@ Start here (for AI agents):
 
 Core Commands:
   open <url>                 Navigate to URL
+  read [url]                 Fetch agent-readable text
   click <sel>                Click element (or @ref)
   dblclick <sel>             Double-click element
   type <sel> <text>          Type into element
