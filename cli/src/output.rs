@@ -1299,7 +1299,7 @@ Options:
   --require-md         Fail unless the response is Content-Type: text/markdown
   --llms <index|full>  Print /llms.txt links or /llms-full.txt
   --outline            Print a heading outline for the selected page
-  --filter <text>      Filter --llms links/sections or --outline headings
+  --filter <text>      Filter page sections, --llms links/sections, or --outline headings
   --timeout <ms>       Request timeout in milliseconds (default: 10000)
 
 Global Options:
@@ -1309,6 +1309,7 @@ Global Options:
 Examples:
   agent-browser read
   agent-browser read https://docs.example.com/guide
+  agent-browser read https://docs.example.com/guide --filter auth
   agent-browser read https://docs.example.com/guide --outline
   agent-browser read https://docs.example.com --llms index --filter auth
   agent-browser read https://docs.example.com --llms full --filter auth

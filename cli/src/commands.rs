@@ -1968,18 +1968,6 @@ fn parse_read(rest: &[&str], id: &str) -> Result<Value, ParseError> {
             usage: READ_USAGE,
         });
     }
-    if cmd.get("filter").is_some()
-        && cmd.get("llms").is_none()
-        && !cmd
-            .get("outline")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false)
-    {
-        return Err(ParseError::InvalidValue {
-            message: "read --filter requires --llms or --outline".to_string(),
-            usage: READ_USAGE,
-        });
-    }
     if let Some(url) = url {
         cmd["url"] = json!(url);
     }
@@ -3618,12 +3606,15 @@ mod tests {
     }
 
     #[test]
-    fn test_read_rejects_filter_without_llms_or_outline() {
-        let result = parse_command(
+    fn test_read_filter_without_llms_or_outline_filters_page_sections() {
+        let cmd = parse_command(
             &args("read https://example.com --filter auth"),
             &default_flags(),
-        );
-        assert!(matches!(result, Err(ParseError::InvalidValue { .. })));
+        )
+        .unwrap();
+        assert_eq!(cmd["action"], "read");
+        assert_eq!(cmd["url"], "https://example.com");
+        assert_eq!(cmd["filter"], "auth");
     }
 
     #[test]

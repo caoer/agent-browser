@@ -14,6 +14,7 @@ agent-browser open <url>      # Launch + navigate (aliases: goto, navigate)
 agent-browser read [url]      # Fetch agent-readable text, or read the active tab
                               # Sends Accept: text/markdown, then tries .md if needed
                               # Checks /llms.txt for matching docs links before HTML fallback
+                              # --filter narrows page content to matching heading sections
                               # Options: --raw, --require-md, --outline, --llms <index|full>, --filter, --timeout <ms>
 agent-browser back            # Go back
 agent-browser forward         # Go forward

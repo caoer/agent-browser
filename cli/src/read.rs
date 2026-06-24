@@ -38,7 +38,7 @@ pub struct ReadOptions {
     pub llms: Option<LlmsMode>,
     /// Return a heading outline for the selected page content.
     pub outline: bool,
-    /// Filter /llms.txt links, /llms-full.txt sections, or outline headings.
+    /// Filter page sections, /llms.txt links, /llms-full.txt sections, or outline headings.
     pub filter: Option<String>,
     /// HTTP request timeout in milliseconds.
     pub timeout_ms: u64,
@@ -201,7 +201,7 @@ async fn run_llms_full(
         return Err(format!("llms-full.txt failed with HTTP {}", fetch.status));
     }
     let content = if let Some(filter) = options.filter.as_deref() {
-        filter_markdown_sections(&fetch.body, filter)
+        filter_markdown_sections(&fetch.body, filter, "No matching llms-full.txt sections")
     } else {
         fetch.body.clone()
     };
@@ -335,6 +335,9 @@ fn read_json_from_content(
     if options.outline {
         let outline = format_page_outline(&content, &fetch.final_url, options.filter.as_deref());
         read_json(target, fetch, &format!("{}-outline", source), outline)
+    } else if let Some(filter) = options.filter.as_deref() {
+        let filtered = filter_page_sections(&content, filter);
+        read_json(target, fetch, &format!("{}-filtered", source), filtered)
     } else {
         read_json(target, fetch, source, content)
     }
@@ -585,38 +588,68 @@ fn format_page_outline(content: &str, final_url: &str, filter: Option<&str>) -> 
 }
 
 fn parse_markdown_headings(content: &str) -> Vec<Heading> {
-    content
-        .lines()
-        .filter_map(|line| {
-            let trimmed = line.trim_start();
-            let level = trimmed.chars().take_while(|ch| *ch == '#').count();
-            if level == 0 || level > 6 {
-                return None;
-            }
-            let rest = &trimmed[level..];
-            if !rest.is_empty()
-                && !rest
-                    .chars()
-                    .next()
-                    .map(char::is_whitespace)
-                    .unwrap_or(false)
-            {
-                return None;
-            }
-            let title = rest.trim().trim_end_matches('#').trim();
-            if title.is_empty() {
-                None
-            } else {
-                Some(Heading {
-                    level,
-                    title: title.to_string(),
-                })
-            }
-        })
-        .collect()
+    content.lines().filter_map(parse_markdown_heading).collect()
 }
 
-fn filter_markdown_sections(body: &str, filter: &str) -> String {
+fn filter_page_sections(content: &str, filter: &str) -> String {
+    let needle = filter.to_ascii_lowercase();
+    let lines = content.lines().collect::<Vec<_>>();
+    let headings = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| parse_markdown_heading(line).map(|heading| (index, heading)))
+        .collect::<Vec<_>>();
+
+    let mut sections = Vec::new();
+    let mut captured_until = 0;
+    for (i, (start, heading)) in headings.iter().enumerate() {
+        if *start < captured_until || !heading.title.to_ascii_lowercase().contains(&needle) {
+            continue;
+        }
+        let end = headings[i + 1..]
+            .iter()
+            .find(|(_, next)| next.level <= heading.level)
+            .map(|(index, _)| *index)
+            .unwrap_or(lines.len());
+        captured_until = end;
+        sections.push(lines[*start..end].join("\n").trim().to_string());
+    }
+
+    if !sections.is_empty() {
+        return sections.join("\n\n");
+    }
+
+    filter_markdown_sections(content, filter, "No matching page sections")
+}
+
+fn parse_markdown_heading(line: &str) -> Option<Heading> {
+    let trimmed = line.trim_start();
+    let level = trimmed.chars().take_while(|ch| *ch == '#').count();
+    if level == 0 || level > 6 {
+        return None;
+    }
+    let rest = &trimmed[level..];
+    if !rest.is_empty()
+        && !rest
+            .chars()
+            .next()
+            .map(char::is_whitespace)
+            .unwrap_or(false)
+    {
+        return None;
+    }
+    let title = rest.trim().trim_end_matches('#').trim();
+    if title.is_empty() {
+        None
+    } else {
+        Some(Heading {
+            level,
+            title: title.to_string(),
+        })
+    }
+}
+
+fn filter_markdown_sections(body: &str, filter: &str, no_match_message: &str) -> String {
     let needle = filter.to_ascii_lowercase();
     let mut sections: Vec<String> = Vec::new();
     let mut current = String::new();
@@ -647,7 +680,7 @@ fn filter_markdown_sections(body: &str, filter: &str) -> String {
         .filter(|line| line.to_ascii_lowercase().contains(&needle))
         .collect::<Vec<_>>();
     if matching_lines.is_empty() {
-        "No matching llms-full.txt sections".to_string()
+        no_match_message.to_string()
     } else {
         matching_lines.join("\n")
     }
@@ -960,6 +993,19 @@ Inline [Authentication](/inline-auth) should not become a TOC item.
         assert!(!outline.contains("Usage"));
     }
 
+    #[test]
+    fn filter_page_sections_prefers_matching_headings() {
+        let content = "# Guide\n\nIntro.\n\n## Setup\n\nInstall.\n\n## Response rendering\n\nRender JSON.\n\n### Custom renderer\n\nUse a component.\n\n## Further reading\n\nNext.";
+        let filtered = filter_page_sections(content, "Response rendering");
+
+        assert!(filtered.contains("## Response rendering"));
+        assert!(filtered.contains("Render JSON."));
+        assert!(filtered.contains("### Custom renderer"));
+        assert!(filtered.contains("Use a component."));
+        assert!(!filtered.contains("## Setup"));
+        assert!(!filtered.contains("## Further reading"));
+    }
+
     #[tokio::test]
     async fn run_read_prefers_markdown_accept() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1168,6 +1214,40 @@ Inline [Authentication](/inline-auth) should not become a TOC item.
         assert!(content.contains("    - Token auth"));
         assert!(!content.contains("Install"));
         assert!(!content.contains("Usage"));
+    }
+
+    #[tokio::test]
+    async fn run_read_filter_extracts_selected_page_section() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let base = format!("http://{}/docs/intro", addr);
+
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buf = [0_u8; 2048];
+            let n = stream.read(&mut buf).await.unwrap_or(0);
+            let request = String::from_utf8_lossy(&buf[..n]).to_ascii_lowercase();
+            assert!(request.starts_with("get /docs/intro "));
+            let body = "# Intro\n\n## Setup\n\nInstall.\n\n## Response rendering\n\nRender JSON.\n\n### Custom renderer\n\nUse a component.\n\n## Further reading\n\nNext.\n";
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/markdown\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(response.as_bytes()).await;
+        });
+
+        let options = ReadOptions {
+            filter: Some("Response rendering".to_string()),
+            ..ReadOptions::default()
+        };
+        let data = run_read(&base, options).await.unwrap();
+        let content = data["content"].as_str().unwrap();
+        assert_eq!(data["source"], "accept-markdown-filtered");
+        assert!(content.contains("## Response rendering"));
+        assert!(content.contains("### Custom renderer"));
+        assert!(!content.contains("## Setup"));
+        assert!(!content.contains("## Further reading"));
     }
 
     #[tokio::test]
